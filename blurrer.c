@@ -5,6 +5,7 @@
 #include <sys/shm.h>
 #include <pthread.h>
 #include "bmp.h"
+#include "utils.h"
 
 #define SHM_KEY_IMAGE 1234
 #define SHM_KEY_BLUR 5678
@@ -124,13 +125,6 @@ void applyBlur(BMP_Image *image, int numThreads) {
     free(blurredImage);
 }
 
-void freeImageMemory(BMP_Image *image) {
-    for (int i = 0; i < image->norm_height; i++) {
-        free(image->pixels[i]);
-    }
-    free(image->pixels);
-    free(image);
-}
 
 int main(int argc, char *argv[]) {
     if (argc < 2 || argc > 4) {
@@ -154,84 +148,27 @@ int main(int argc, char *argv[]) {
 
     BMP_Image *image = NULL;
     if (useShm) {
-        // Leer imagen desde memoria compartida
-        int shmIdImage = shmget(SHM_KEY_IMAGE, 0, 0666);
-        if (shmIdImage < 0) {
-            perror("Error accessing shared memory for image");
-            return 1;
-        }
-        image = (BMP_Image *)shmat(shmIdImage, NULL, 0);
-        if (image == (BMP_Image *)-1) {
-            perror("Error attaching shared memory for image");
-            return 1;
-        }
+        image = readImageFromSharedMemory(SHM_KEY_IMAGE);
     } else {
-        // Leer imagen desde archivo
-        FILE *srcFile = fopen(argv[1], "rb");
-        if (srcFile == NULL) {
-            printError(FILE_ERROR);
-            return 1;
-        }
+        image = readImageFromFile(argv[1]);
+    }
 
-        image = readImage(srcFile);
-        if (image == NULL) {
-            fclose(srcFile);
-            printError(MEMORY_ERROR);
-            return 1;
-        }
-        fclose(srcFile);
+    if (image == NULL) {
+        return 1;
     }
 
     // Aplicar desenfoque
     applyBlur(image, numThreads);
 
+    int result = 0;
     if (useShm) {
-        // Escribir imagen procesada en memoria compartida
-        int shmIdBlur = shmget(SHM_KEY_BLUR, 0, 0666);
-        if (shmIdBlur < 0) {
-            perror("Error accessing shared memory for blurrer");
-            if (!useShm) freeImageMemory(image);
-            return 1;
-        }
-        Pixel *shmBlur = (Pixel *)shmat(shmIdBlur, NULL, 0);
-        if (shmBlur == (Pixel *)-1) {
-            perror("Error attaching shared memory for blurrer");
-            if (!useShm) freeImageMemory(image);
-            return 1;
-        }
-        int width = image->header.width_px;
-        int halfHeight = image->norm_height / 2;
-        for (int i = 0; i < halfHeight; i++) {
-            memcpy(shmBlur + i * width, image->pixels[i], width * sizeof(Pixel));
-        }
-        // No liberar la memoria compartida
-        // shmdt(shmBlur);
+        result = writeImageToSharedMemory(image,SHM_KEY_BLUR);
     } else {
-        // Guardar imagen procesada en archivo
-        char *dot = strrchr(argv[1], '.');
-        size_t baseLength = dot ? (size_t)(dot - argv[1]) : strlen(argv[1]);
-        char *outputFile = malloc(baseLength + strlen("_blurred.bmp") + 1);
-        if (outputFile == NULL) {
-            printError(MEMORY_ERROR);
-            freeImageMemory(image);
-            return 1;
-        }
-        strncpy(outputFile, argv[1], baseLength);
-        outputFile[baseLength] = '\0';
-        strcat(outputFile, "_blurred.bmp");
-
-        if (!writeImage(outputFile, image)) {
-            printError(FILE_ERROR);
-            free(outputFile);
-            freeImageMemory(image);
-            return 1;
-        }
-
-        free(outputFile);
+        result = saveImageToFile(image, argv[1]);
     }
 
     if (!useShm) freeImageMemory(image);
 
     printf("Blurring completed successfully.\n");
-    return 0;
+    return result;
 }

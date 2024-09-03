@@ -4,6 +4,7 @@
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include "bmp.h"
+#include "utils.h"
 
 #define SHM_KEY_IMAGE 1234
 #define SHM_KEY_EDGE 91011
@@ -125,14 +126,6 @@ void applyEdgeDetection(BMP_Image *image, int numThreads) {
     free(edgeImage);
 }
 
-void freeImageMemory(BMP_Image *image) {
-    for (int i = 0; i < image->norm_height; i++) {
-        free(image->pixels[i]);
-    }
-    free(image->pixels);
-    free(image);
-}
-
 int main(int argc, char *argv[]) {
     if (argc < 2 || argc > 4) {
         fprintf(stderr, "Usage: %s <input_file|shm> [num_threads] [use_shm]\n", argv[0]);
@@ -155,85 +148,27 @@ int main(int argc, char *argv[]) {
 
     BMP_Image *image = NULL;
     if (useShm) {
-        // Leer imagen desde memoria compartida
-        int shmIdImage = shmget(SHM_KEY_IMAGE, 0, 0666);
-        if (shmIdImage < 0) {
-            perror("Error accessing shared memory for image");
-            return 1;
-        }
-        image = (BMP_Image *)shmat(shmIdImage, NULL, 0);
-        if (image == (BMP_Image *)-1) {
-            perror("Error attaching shared memory for image");
-            return 1;
-        }
+        image = readImageFromSharedMemory(SHM_KEY_IMAGE);
     } else {
-        // Leer imagen desde archivo
-        FILE *srcFile = fopen(argv[1], "rb");
-        if (srcFile == NULL) {
-            printError(FILE_ERROR);
-            return 1;
-        }
+        image = readImageFromFile(argv[1]);
+    }
 
-        image = readImage(srcFile);
-        if (image == NULL) {
-            fclose(srcFile);
-            printError(MEMORY_ERROR);
-            return 1;
-        }
-        fclose(srcFile);
+    if (image == NULL) {
+        return 1;
     }
 
     // Aplicar detección de bordes
     applyEdgeDetection(image, numThreads);
 
+    int result = 0;
     if (useShm) {
-        // Escribir imagen procesada en memoria compartida
-        int shmIdEdge = shmget(SHM_KEY_EDGE, 0, 0666);
-        if (shmIdEdge < 0) {
-            perror("Error accessing shared memory for edge_detector");
-            if (!useShm) freeImageMemory(image);
-            return 1;
-        }
-        Pixel *shmEdge = (Pixel *)shmat(shmIdEdge, NULL, 0);
-        if (shmEdge == (Pixel *)-1) {
-            perror("Error attaching shared memory for edge_detector");
-            if (!useShm) freeImageMemory(image);
-            return 1;
-        }
-        int width = image->header.width_px;
-        int halfHeight = image->norm_height / 2;
-        for (int i = halfHeight; i < image->norm_height; i++) {
-            memcpy(shmEdge + (i - halfHeight) * width, image->pixels[i], width * sizeof(Pixel));
-        }
-        // No liberar la memoria compartida
-        // shmdt(shmEdge);
+        result = writeImageToSharedMemory(image, SHM_KEY_EDGE);
     } else {
-        // Construye la ruta de salida
-        char *dot = strrchr(argv[1], '.');
-        size_t baseLength = dot ? (size_t)(dot - argv[1]) : strlen(argv[1]);
-        char *outputFile = malloc(baseLength + strlen("_edges.bmp") + 1);
-        if (outputFile == NULL) {
-            printError(MEMORY_ERROR);
-            freeImage(image);
-            return 1;
-        }
-        strncpy(outputFile, argv[1], baseLength);
-        outputFile[baseLength] = '\0';
-        strcat(outputFile, "_edges.bmp");
-
-        // Guarda la imagen procesada
-        if (!writeImage(outputFile, image)) {
-            printError(FILE_ERROR);
-            free(outputFile);
-            freeImage(image);
-            return 1;
-        }
-
-        free(outputFile);
+        result = saveImageToFile(image, argv[1]);
     }
 
     if (!useShm) freeImageMemory(image);
 
     printf("Edge detection completed successfully.\n");
-    return 0;
+    return result;
 }
