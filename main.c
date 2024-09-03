@@ -38,8 +38,14 @@ int executeCommand(const char *command, char *const argv[]) {
 }
 
 int main(int argc, char *argv[]) {
-    if (argc != 2) {
-        fprintf(stderr, "Usage: %s <input_file>\n", argv[0]);
+    if (argc != 3) {
+        fprintf(stderr, "Usage: %s <input_file> <num_threads>\n", argv[0]);
+        return 1;
+    }
+
+    int numThreads = atoi(argv[2]);
+    if (numThreads <= 0) {
+        fprintf(stderr, "Number of threads must be a positive integer.\n");
         return 1;
     }
 
@@ -50,8 +56,10 @@ int main(int argc, char *argv[]) {
     }
 
     // Ejecutar el publisher
-    char *publisherArgs[] = {"./publisher", argv[1], NULL};
-    // printf("Executing command: ./publisher %s\n", argv[1]); // Mensaje de depuración
+    char numThreadsStr[10];
+    snprintf(numThreadsStr, sizeof(numThreadsStr), "%d", numThreads);
+    char *publisherArgs[] = {"./publisher", argv[1], numThreadsStr, NULL};
+    // printf("Executing command: ./publisher %s %s\n", argv[1], numThreadsStr); // Mensaje de depuración
     if (executeCommand("./publisher", publisherArgs) != 0) {
         return 1;
     }
@@ -61,8 +69,8 @@ int main(int argc, char *argv[]) {
     pid_t pid_blurrer = fork();
     if (pid_blurrer == 0) {
         // Proceso hijo para blurrer
-        printf("Executing command: ./blurrer shm 4 shm\n"); // Mensaje de depuración
-        execl("./blurrer", "blurrer", "shm", "4", "shm", (char *)NULL);
+        printf("Executing command: ./blurrer shm %s shm\n", numThreadsStr); // Mensaje de depuración
+        execl("./blurrer", "blurrer", "shm", numThreadsStr, "shm", (char *)NULL);
         perror("Error executing blurrer");
         exit(1);
     } else if (pid_blurrer < 0) {
@@ -73,8 +81,8 @@ int main(int argc, char *argv[]) {
     pid_t pid_edge_detector = fork();
     if (pid_edge_detector == 0) {
         // Proceso hijo para edge_detector
-        printf("Executing command: ./edge_detector shm 4 shm\n"); // Mensaje de depuración
-        execl("./edge_detector", "edge_detector", "shm", "4", "shm", (char *)NULL);
+        printf("Executing command: ./edge_detector shm %s shm\n", numThreadsStr); // Mensaje de depuración
+        execl("./edge_detector", "edge_detector", "shm", numThreadsStr, "shm", (char *)NULL);
         perror("Error executing edge_detector");
         exit(1);
     } else if (pid_edge_detector < 0) {
@@ -101,8 +109,8 @@ int main(int argc, char *argv[]) {
     }
 
     // Ejecutar el combiner
-    char *combinerArgs[] = {"./combiner", argv[1], NULL};
-    printf("Executing command: ./combiner %s\n", argv[1]); // Mensaje de depuración
+    char *combinerArgs[] = {"./combiner", argv[1], numThreadsStr, NULL};
+    printf("Executing command: ./combiner %s %s\n", argv[1], numThreadsStr); // Mensaje de depuración
     if (executeCommand("./combiner", combinerArgs) != 0) {
         return 1;
     }

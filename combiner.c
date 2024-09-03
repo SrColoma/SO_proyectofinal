@@ -4,9 +4,11 @@
 #include <sys/shm.h>
 #include <string.h>
 #include "bmp.h"
+#include "utils.h"
 
 #define SHM_KEY_BLUR 1234
 #define SHM_KEY_EDGE 5678
+#define SHM_KEY_METADATA 1213
 
 Pixel* readPixelsFromSharedMemory(key_t shmKey, int *shmId) {
     *shmId = shmget(shmKey, 0, 0666);
@@ -85,31 +87,56 @@ int saveCombinedImage(const char *outputFileName, BMP_Image *combinedImage) {
     return 0;
 }
 
+ImageMetadata* attachMetadataSharedMemory(key_t shmKey) {
+    int shm_id = shmget(shmKey, sizeof(ImageMetadata), 0666);
+    if (shm_id < 0) {
+        perror("Error accessing shared memory for metadata");
+        return NULL;
+    }
+
+    ImageMetadata *shm_metadata = (ImageMetadata *)shmat(shm_id, NULL, 0);
+    if (shm_metadata == (ImageMetadata *)-1) {
+        perror("Error attaching shared memory for metadata");
+        return NULL;
+    }
+
+    return shm_metadata;
+}
+
 int main(int argc, char *argv[]) {
     if (argc != 2) {
         fprintf(stderr, "Usage: %s <output_file>\n", argv[0]);
         return 1;
     }
 
+    // Obtener los metadatos de la imagen desde la memoria compartida
+    ImageMetadata *metadata = attachMetadataSharedMemory(SHM_KEY_METADATA);
+    if (metadata == NULL) {
+        return 1;
+    }
+
+    int width = metadata->width;
+    int halfHeight = metadata->norm_height / 2;
+
     int shmIdBlur, shmIdEdge;
     Pixel *shmBlur = readPixelsFromSharedMemory(SHM_KEY_BLUR, &shmIdBlur);
     if (shmBlur == NULL) {
+        shmdt(metadata);
         return 1;
     }
 
     Pixel *shmEdge = readPixelsFromSharedMemory(SHM_KEY_EDGE, &shmIdEdge);
     if (shmEdge == NULL) {
         shmdt(shmBlur);
+        shmdt(metadata);
         return 1;
     }
-
-    int width = 0; // Asumimos que el ancho es conocido o se puede obtener de alguna manera
-    int halfHeight = 0; // Asumimos que la mitad de la altura es conocida o se puede obtener de alguna manera
 
     BMP_Image *combinedImage = createCombinedImage(shmBlur, shmEdge, width, halfHeight);
     if (combinedImage == NULL) {
         shmdt(shmBlur);
         shmdt(shmEdge);
+        shmdt(metadata);
         return 1;
     }
 
@@ -117,12 +144,14 @@ int main(int argc, char *argv[]) {
         freeImageMemory(combinedImage);
         shmdt(shmBlur);
         shmdt(shmEdge);
+        shmdt(metadata);
         return 1;
     }
 
     freeImageMemory(combinedImage);
     shmdt(shmBlur);
     shmdt(shmEdge);
+    shmdt(metadata);
 
     printf("Image combined and saved successfully.\n");
     return 0;

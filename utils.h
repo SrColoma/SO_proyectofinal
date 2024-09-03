@@ -4,7 +4,11 @@
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include "bmp.h"
-
+typedef struct {
+    int width;
+    int height;
+    int norm_height;
+} ImageMetadata;
 
 void freeImageMemory(BMP_Image *image);
 
