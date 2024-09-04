@@ -1,88 +1,111 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <sys/wait.h>
+#include <sys/shm.h>
 #include "bmp.h"
-#include "utils.h"
+#include "myutils.h"
+#include "applyBlur.h"
+#include "applyEdgeDetection.h"
+#include "publishImage.h"
+
+#define SHM_KEY1 1234
+#define SHM_KEY2 5678
+
+
+void manageArgs(int argc, char *argv[], char **inputFile, int *numThreads) {
+    if (argc != 3) {
+        fprintf(stderr, "Usage: %s <input_file> <num_threads>\n", argv[0]);
+        exit(1);
+    }
+    *inputFile = argv[1];
+    *numThreads = atoi(argv[2]);
+    if (*numThreads <= 0) {
+        fprintf(stderr, "Number of threads must be a positive integer.\n");
+        exit(1);
+    }
+}
+
+void verifyFile(const char *filename) {
+    if (access(filename, F_OK) == -1) {
+        fprintf(stderr, "Input file %s does not exist\n", filename);
+        exit(1);
+    }
+}
 
 
 int main(int argc, char *argv[]) {
-    if (argc != 3) {
-        fprintf(stderr, "Usage: %s <input_file> <num_threads>\n", argv[0]);
-        return 1;
-    }
+    char *inputFile;
+    int numThreads;
+    manageArgs(argc, argv, &inputFile, &numThreads);
+    verifyFile(inputFile);
 
-    int numThreads = atoi(argv[2]);
-    if (numThreads <= 0) {
-        fprintf(stderr, "Number of threads must be a positive integer.\n");
-        return 1;
-    }
-
-    // Verificar que el archivo de entrada existe
-    if (access(argv[1], F_OK) == -1) {
-        fprintf(stderr, "Input file %s does not exist\n", argv[1]);
-        return 1;
-    }
-
-    // Ejecutar el publisher
-    char numThreadsStr[10];
-    snprintf(numThreadsStr, sizeof(numThreadsStr), "%d", numThreads);
-    char *publisherArgs[] = {"./publisher", argv[1], numThreadsStr, NULL};
-    // printf("Executing command: ./publisher %s %s\n", argv[1], numThreadsStr); // Mensaje de depuración
-    if (executeCommand("./publisher", publisherArgs) != 0) {
-        return 1;
-    }
-    printf("Publisher finished successfully.\n"); // Mensaje de depuración
-
-    // Ejecutar blurrer y edge_detector simultáneamente
-    pid_t pid_blurrer = fork();
-    if (pid_blurrer == 0) {
-        // Proceso hijo para blurrer
-        printf("Executing command: ./blurrer shm %s shm\n", numThreadsStr); // Mensaje de depuración
-        execl("./blurrer", "blurrer", "shm", numThreadsStr, "shm", (char *)NULL);
-        perror("Error executing blurrer");
+    // Read the image from file
+    FILE *file = fopen(inputFile, "rb");
+    if (!file) {
+        perror("fopen");
         exit(1);
-    } else if (pid_blurrer < 0) {
-        perror("fork for blurrer");
-        return 1;
     }
+    BMP_Image *image = readImage(file);
+    fclose(file);
 
-    pid_t pid_edge_detector = fork();
-    if (pid_edge_detector == 0) {
-        // Proceso hijo para edge_detector
-        printf("Executing command: ./edge_detector shm %s shm\n", numThreadsStr); // Mensaje de depuración
-        execl("./edge_detector", "edge_detector", "shm", numThreadsStr, "shm", (char *)NULL);
-        perror("Error executing edge_detector");
+    // Create shared memory for the blurred image
+    int shmId1 = shmget(SHM_KEY1, sizeof(BMP_Image), IPC_CREAT | 0666);
+    if (shmId1 < 0) {
+        perror("shmget");
         exit(1);
-    } else if (pid_edge_detector < 0) {
-        perror("fork for edge_detector");
-        return 1;
+    }
+    BMP_Image *sharedImage1 = (BMP_Image *)shmat(shmId1, NULL, 0);
+    if (sharedImage1 == (BMP_Image *)-1) {
+        perror("shmat");
+        exit(1);
     }
 
-    // Esperar a que blurrer y edge_detector terminen
-    int status;
-    waitpid(pid_blurrer, &status, 0);
-    if (WIFEXITED(status)) {
-        printf("Blurrer finished with status %d.\n", WEXITSTATUS(status));
-    } else {
-        fprintf(stderr, "Blurrer did not terminate normally.\n");
+    // Create shared memory for the edge-detected image
+    int shmId2 = shmget(SHM_KEY2, sizeof(BMP_Image), IPC_CREAT | 0666);
+    if (shmId2 < 0) {
+        perror("shmget");
+        exit(1);
+    }
+    BMP_Image *sharedImage2 = (BMP_Image *)shmat(shmId2, NULL, 0);
+    if (sharedImage2 == (BMP_Image *)-1) {
+        perror("shmat");
+        exit(1);
     }
 
-    waitpid(pid_edge_detector, &status, 0);
-    if (WIFEXITED(status)) {
-        printf("Edge_detector finished with status %d.\n", WEXITSTATUS(status));
-    } else {
-        fprintf(stderr, "Edge_detector did not terminate normally.\n");
+    // Copy the image to both shared memory segments
+    *sharedImage1 = *image;
+    *sharedImage2 = *image;
+
+    // Apply blur to the first shared image
+    printf("Applying blur to the first shared image...\n");
+    applyBlur(sharedImage1, numThreads);
+
+    // Apply edge detection to the second shared image
+    printf("Applying edge detection to the second shared image...\n");
+    applyEdgeDetection(sharedImage2, numThreads);
+
+    // Combine the images
+    BMP_Image *combinedImage = (BMP_Image *)malloc(sizeof(BMP_Image));
+    *combinedImage = *image;
+    printf("Combining images...\n");
+    combineImages(sharedImage1, sharedImage2, combinedImage);
+
+    // Save the combined image to a file
+    printf("Saving the combined image...\n");
+    if (!writeImage("combined_image.bmp", combinedImage)) {
+        fprintf(stderr, "Failed to save the combined image\n");
+        exit(1);
     }
 
-    // Ejecutar el combiner
-    char *combinerArgs[] = {"./combiner", "temp.bmp",NULL};
-    // printf("Executing command: ./combiner %s\n", argv[1]); // Mensaje de depuración
-    if (executeCommand("./combiner", combinerArgs) != 0) {
-        return 1;
-    }
-    printf("Combiner finished successfully.\n"); // Mensaje de depuración
+    // Detach and free shared memory
+    shmdt(sharedImage1);
+    shmdt(sharedImage2);
+    shmctl(shmId1, IPC_RMID, NULL);
+    shmctl(shmId2, IPC_RMID, NULL);
 
-    printf("All processes completed successfully.\n");
+    // Free the combined image
+    freeImage(combinedImage);
+
+    printf("Process completed successfully.\n");
     return 0;
 }

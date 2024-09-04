@@ -4,8 +4,8 @@
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include "bmp.h"
-#include "utils.h"
-
+#include "myutils.h"
+ 
 
 void freeImageMemory(BMP_Image *image) {
     for (int i = 0; i < image->norm_height; i++) {
@@ -56,7 +56,6 @@ BMP_Image* readImageFromSharedMemory(key_t shmKey) {
     }
     return image;
 }
-
 
 int writeImageToSharedMemory(BMP_Image *image, key_t shmKey, int half) {
     printf("Writing shared memory for key: %i\n", shmKey);
@@ -145,4 +144,21 @@ int executeCommand(const char *command, char *const argv[]) {
         }
     }
     return 0;
+}
+
+
+void combineImages(BMP_Image *blurredImage, BMP_Image *edgeDetectedImage, BMP_Image *combinedImage) {
+    int width = blurredImage->header.width_px;
+    int height = blurredImage->header.height_px;
+    int halfHeight = height / 2;
+
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            if (y < halfHeight) {
+                combinedImage->pixels[y][x] = blurredImage->pixels[y][x];
+            } else {
+                combinedImage->pixels[y][x] = edgeDetectedImage->pixels[y][x];
+            }
+        }
+    }
 }

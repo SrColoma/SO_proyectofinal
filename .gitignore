@@ -1,11 +1,14 @@
 /blurrer
 /blurrer.o
+/applyBlur.o
 /bmp.o
 /combiner
 /combiner.o
 /edge_detector
 /edge_detector.o
+/applyEdgeDetection.o
 /main.o
 /pipeline
 /publisher
 /publisher.o
+/myutils.o

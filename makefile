@@ -2,29 +2,14 @@ CC = gcc
 CFLAGS = -Wall -Wextra -g
 LDFLAGS = -lrt -lpthread -lm
 
-SRCS = main.c publisher.c blurrer.c edge_detector.c combiner.c bmp.c utils.c
+SRCS = main.c  applyBlur.c applyEdgeDetection.c publishImage.c bmp.c myutils.c
 OBJS = $(SRCS:.c=.o)
-EXECS = pipeline publisher blurrer edge_detector combiner
+EXECS = pipeline
 
 all: $(EXECS)
 
-pipeline: main.o bmp.o utils.o
+pipeline: main.o bmp.o myutils.o applyBlur.o applyEdgeDetection.o publishImage.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
-
-publisher: publisher.o bmp.o utils.o
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
-
-blurrer: blurrer.o bmp.o utils.o
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
-
-edge_detector: edge_detector.o bmp.o utils.o
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
-
-combiner: combiner.o bmp.o utils.o
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
-
-%.o: %.c
-	$(CC) $(CFLAGS) -c $<
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $<
@@ -35,5 +20,6 @@ clean:
 	find . -type f -name '*_blurred.bmp' -delete
 	find . -type f -name '*_edges.bmp' -delete
 	find . -type f -name '*_filtered.bmp' -delete
+	find . -type f -name '*temp.bmp' -delete
 
 .PHONY: all clean

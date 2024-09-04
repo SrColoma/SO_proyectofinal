@@ -1,10 +1,9 @@
-//bmp.c
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>
 
 #include "bmp.h"
-
+ 
 /* Función para imprimir mensajes de error */
 void printError(int error){
   switch(error){

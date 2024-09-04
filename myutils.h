@@ -11,6 +11,12 @@
 #define SHM_KEY_IMAGE 1111234
 
 typedef struct {
+    BMP_Image *image;
+    int startRow;
+    int endRow;
+} ThreadData;
+
+typedef struct {
     int width;
     int height;
     int norm_height;
@@ -29,3 +35,5 @@ int writeImageToSharedMemory(BMP_Image *image, key_t shmKey, int half);
 int saveImageToFile(BMP_Image *image, const char *filename);
 
 int executeCommand(const char *command, char *const argv[]);
+
+void combineImages(BMP_Image *blurredImage, BMP_Image *edgeDetectedImage, BMP_Image *combinedImage);
