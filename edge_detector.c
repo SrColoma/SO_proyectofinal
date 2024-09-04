@@ -1,13 +1,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
+#include <math.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include "bmp.h"
 #include "utils.h"
 
-#define SHM_KEY_IMAGE 1234
-#define SHM_KEY_EDGE 91011
+
+#define KERNEL_SIZE 3
 
 typedef struct {
     BMP_Image *image;
@@ -20,48 +22,59 @@ void *edgeSection(void *arg) {
     EdgeTask *task = (EdgeTask *)arg;
     BMP_Image *image = task->image;
     BMP_Image *edgeImage = task->edgeImage;
+    int startRow = task->startRow;
+    int endRow = task->endRow;
+
     int width = image->header.width_px;
     int height = image->norm_height;
 
     // Kernel de detección de bordes (Sobel)
-    int kernelX[3][3] = {
+    int kernelX[KERNEL_SIZE][KERNEL_SIZE] = {
         {-1, 0, 1},
         {-2, 0, 2},
         {-1, 0, 1}
     };
-    int kernelY[3][3] = {
+
+    int kernelY[KERNEL_SIZE][KERNEL_SIZE] = {
         {-1, -2, -1},
-        { 0,  0,  0},
-        { 1,  2,  1}
+        {0, 0, 0},
+        {1, 2, 1}
     };
 
-    for (int y = task->startRow; y < task->endRow; y++) {
+    for (int y = startRow; y < endRow; y++) {
         for (int x = 0; x < width; x++) {
-            int gxRed = 0, gyRed = 0;
-            int gxGreen = 0, gyGreen = 0;
-            int gxBlue = 0, gyBlue = 0;
+            float gradientXRed = 0.0, gradientXGreen = 0.0, gradientXBlue = 0.0;
+            float gradientYRed = 0.0, gradientYGreen = 0.0, gradientYBlue = 0.0;
 
-            for (int ky = 0; ky < 3; ky++) {
-                for (int kx = 0; kx < 3; kx++) {
-                    int ny = y + ky - 1;
-                    int nx = x + kx - 1;
+            // Aplicar el kernel de detección de bordes
+            for (int ky = 0; ky < KERNEL_SIZE; ky++) {
+                for (int kx = 0; kx < KERNEL_SIZE; kx++) {
+                    int pixelY = y + ky - 1;
+                    int pixelX = x + kx - 1;
 
-                    if (ny >= 0 && ny < height && nx >= 0 && nx < width) {
-                        Pixel *pixel = &image->pixels[ny][nx];
-                        gxRed += pixel->red * kernelX[ky][kx];
-                        gyRed += pixel->red * kernelY[ky][kx];
-                        gxGreen += pixel->green * kernelX[ky][kx];
-                        gyGreen += pixel->green * kernelY[ky][kx];
-                        gxBlue += pixel->blue * kernelX[ky][kx];
-                        gyBlue += pixel->blue * kernelY[ky][kx];
+                    // Verificar límites de la imagen
+                    if (pixelY >= 0 && pixelY < height && pixelX >= 0 && pixelX < width) {
+                        Pixel *pixel = &image->pixels[pixelY][pixelX];
+                        gradientXRed += pixel->red * kernelX[ky][kx];
+                        gradientXGreen += pixel->green * kernelX[ky][kx];
+                        gradientXBlue += pixel->blue * kernelX[ky][kx];
+                        gradientYRed += pixel->red * kernelY[ky][kx];
+                        gradientYGreen += pixel->green * kernelY[ky][kx];
+                        gradientYBlue += pixel->blue * kernelY[ky][kx];
                     }
                 }
             }
 
+            // Calcular la magnitud del gradiente
+            float magnitudeRed = sqrt(gradientXRed * gradientXRed + gradientYRed * gradientYRed);
+            float magnitudeGreen = sqrt(gradientXGreen * gradientXGreen + gradientYGreen * gradientYGreen);
+            float magnitudeBlue = sqrt(gradientXBlue * gradientXBlue + gradientYBlue * gradientYBlue);
+
+            // Asignar el valor de detección de bordes al píxel correspondiente en la imagen de bordes
             Pixel *edgePixel = &edgeImage->pixels[y][x];
-            edgePixel->red = (unsigned char) sqrt(gxRed * gxRed + gyRed * gyRed);
-            edgePixel->green = (unsigned char) sqrt(gxGreen * gxGreen + gyGreen * gyGreen);
-            edgePixel->blue = (unsigned char) sqrt(gxBlue * gxBlue + gyBlue * gyBlue);
+            edgePixel->red = (uint8_t)fmin(magnitudeRed, 255);
+            edgePixel->green = (uint8_t)fmin(magnitudeGreen, 255);
+            edgePixel->blue = (uint8_t)fmin(magnitudeBlue, 255);
         }
     }
 
@@ -71,6 +84,7 @@ void *edgeSection(void *arg) {
 void applyEdgeDetection(BMP_Image *image, int numThreads) {
     int width = image->header.width_px;
     int height = image->norm_height;
+    int halfHeight = height / 2;
 
     BMP_Image *edgeImage = malloc(sizeof(BMP_Image));
     if (edgeImage == NULL) {
@@ -101,13 +115,13 @@ void applyEdgeDetection(BMP_Image *image, int numThreads) {
 
     pthread_t threads[numThreads];
     EdgeTask tasks[numThreads];
-    int rowsPerThread = height / numThreads;
+    int rowsPerThread = halfHeight / numThreads;
 
     for (int i = 0; i < numThreads; i++) {
         tasks[i].image = image;
         tasks[i].edgeImage = edgeImage;
-        tasks[i].startRow = i * rowsPerThread;
-        tasks[i].endRow = (i == numThreads - 1) ? height : (i + 1) * rowsPerThread;
+        tasks[i].startRow = halfHeight + i * rowsPerThread;
+        tasks[i].endRow = (i == numThreads - 1) ? height : halfHeight + (i + 1) * rowsPerThread;
         pthread_create(&threads[i], NULL, edgeSection, &tasks[i]);
     }
 
@@ -115,7 +129,7 @@ void applyEdgeDetection(BMP_Image *image, int numThreads) {
         pthread_join(threads[i], NULL);
     }
 
-    for (int i = 0; i < height; i++) {
+    for (int i = halfHeight; i < height; i++) {
         memcpy(image->pixels[i], edgeImage->pixels[i], width * sizeof(Pixel));
     }
 
@@ -152,8 +166,8 @@ int main(int argc, char *argv[]) {
     } else {
         image = readImageFromFile(argv[1]);
     }
-
     if (image == NULL) {
+        fprintf(stderr, "Error reading image.\n");
         return 1;
     }
 
@@ -162,9 +176,13 @@ int main(int argc, char *argv[]) {
 
     int result = 0;
     if (useShm) {
-        result = writeImageToSharedMemory(image, SHM_KEY_EDGE);
+        result = writeImageToSharedMemory(image, SHM_KEY_IMAGE, LOWER_HALF);
     } else {
         result = saveImageToFile(image, argv[1]);
+    }
+    if (result != 0) {
+        fprintf(stderr, "Error writing image.\n");
+        return 1;
     }
 
     if (!useShm) freeImageMemory(image);

@@ -4,6 +4,7 @@
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include "bmp.h"
+#include "utils.h"
 
 
 void freeImageMemory(BMP_Image *image) {
@@ -41,6 +42,7 @@ int verifyImage(BMP_Image *image) {
 }
 
 BMP_Image* readImageFromSharedMemory(key_t shmKey) {
+    printf("Accessing shared memory for key: %i\n", shmKey);
     int shmIdImage = shmget(shmKey, 0, 0666);
     if (shmIdImage < 0) {
         perror("Error accessing shared memory for image");
@@ -55,24 +57,38 @@ BMP_Image* readImageFromSharedMemory(key_t shmKey) {
     return image;
 }
 
-int writeImageToSharedMemory(BMP_Image *image, key_t shmKey) {
-    int shmIdEdge = shmget(shmKey, 0, 0666);
-    if (shmIdEdge < 0) {
-        perror("Error accessing shared memory for edge_detector");
+
+int writeImageToSharedMemory(BMP_Image *image, key_t shmKey, int half) {
+    printf("Writing shared memory for key: %i\n", shmKey);
+    int shmId = shmget(shmKey, 0, 0666);
+    if (shmId < 0) {
+        perror("Error accessing shared memory");
         return 1;
     }
-    Pixel *shmEdge = (Pixel *)shmat(shmIdEdge, NULL, 0);
-    if (shmEdge == (Pixel *)-1) {
-        perror("Error attaching shared memory for edge_detector");
+    Pixel *shm = (Pixel *)shmat(shmId, NULL, 0);
+    if (shm == (Pixel *)-1) {
+        perror("Error attaching shared memory");
         return 1;
     }
     int width = image->header.width_px;
-    int halfHeight = image->norm_height / 2;
-    for (int i = halfHeight; i < image->norm_height; i++) {
-        memcpy(shmEdge + (i - halfHeight) * width, image->pixels[i], width * sizeof(Pixel));
+    int height = image->norm_height;
+    int halfHeight = height / 2;
+
+    if (half == UPPER_HALF) {
+        for (int i = 0; i < halfHeight; i++) {
+            memcpy(shm + i * width, image->pixels[i], width * sizeof(Pixel));
+        }
+    } else if (half == LOWER_HALF) {
+        for (int i = halfHeight; i < height; i++) {
+            memcpy(shm + (i - halfHeight) * width, image->pixels[i], width * sizeof(Pixel));
+        }
+    } else {
+        fprintf(stderr, "Invalid half specified. Use UPPER_HALF or LOWER_HALF.\n");
+        return 1;
     }
+
     // No liberar la memoria compartida
-    // shmdt(shmEdge);
+    // shmdt(shm);
     return 0;
 }
 
@@ -95,5 +111,38 @@ int saveImageToFile(BMP_Image *image, const char *filename) {
     }
 
     free(outputFile);
+    return 0;
+}
+
+int executeCommand(const char *command, char *const argv[]) {
+    pid_t pid = fork();
+    if (pid < 0) {
+        // Error en fork
+        perror("fork");
+        return 1;
+    } else if (pid == 0) {
+        // Proceso hijo
+        printf("Executing command: %s\n", command); // Mensaje de depuración
+        execvp(command, argv);
+        // Si execvp falla
+        perror("execvp");
+        exit(1);
+    } else {
+        // Proceso padre
+        int status;
+        if (waitpid(pid, &status, 0) == -1) {
+            perror("waitpid");
+            return 1;
+        }
+        if (WIFEXITED(status)) {
+            if (WEXITSTATUS(status) != 0) {
+                fprintf(stderr, "Error executing %s\n", command);
+                return 1;
+            }
+        } else {
+            fprintf(stderr, "%s did not terminate normally\n", command);
+            return 1;
+        }
+    }
     return 0;
 }

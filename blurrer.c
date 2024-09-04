@@ -1,14 +1,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <pthread.h>
 #include "bmp.h"
 #include "utils.h"
-
-#define SHM_KEY_IMAGE 1234
-#define SHM_KEY_BLUR 5678
 
 #define KERNEL_SIZE 3
 
@@ -19,6 +17,9 @@ typedef struct {
     int endRow;
 } BlurTask;
 
+// Declarar el mutex global
+pthread_mutex_t mutex;
+
 void *blurSection(void *arg) {
     BlurTask *task = (BlurTask *)arg;
     BMP_Image *image = task->image;
@@ -28,14 +29,13 @@ void *blurSection(void *arg) {
 
     int width = image->header.width_px;
     int height = image->norm_height;
-
+    printf("----------soy un hilo ejecutando  blur section ----------------\n");
     // Kernel de desenfoque 3x3
     float kernel[KERNEL_SIZE][KERNEL_SIZE] = {
         {1.0/9, 1.0/9, 1.0/9},
         {1.0/9, 1.0/9, 1.0/9},
         {1.0/9, 1.0/9, 1.0/9}
     };
-
     for (int y = startRow; y < endRow; y++) {
         for (int x = 0; x < width; x++) {
             float red = 0.0, green = 0.0, blue = 0.0;
@@ -63,13 +63,13 @@ void *blurSection(void *arg) {
             blurredPixel->blue = (uint8_t)blue;
         }
     }
-
     return NULL;
 }
 
 void applyBlur(BMP_Image *image, int numThreads) {
     int width = image->header.width_px;
     int height = image->norm_height;
+    int halfHeight = height / 2;
 
     BMP_Image *blurredImage = malloc(sizeof(BMP_Image));
     if (blurredImage == NULL) {
@@ -100,21 +100,28 @@ void applyBlur(BMP_Image *image, int numThreads) {
 
     pthread_t threads[numThreads];
     BlurTask tasks[numThreads];
-    int rowsPerThread = height / numThreads;
+    int rowsPerThread = halfHeight / numThreads;
+
+    // Inicializar el mutex
+    pthread_mutex_init(&mutex, NULL);
 
     for (int i = 0; i < numThreads; i++) {
         tasks[i].image = image;
         tasks[i].blurredImage = blurredImage;
         tasks[i].startRow = i * rowsPerThread;
-        tasks[i].endRow = (i == numThreads - 1) ? height : (i + 1) * rowsPerThread;
+        tasks[i].endRow = (i == numThreads - 1) ? halfHeight : (i + 1) * rowsPerThread;
         pthread_create(&threads[i], NULL, blurSection, &tasks[i]);
     }
 
     for (int i = 0; i < numThreads; i++) {
+        printf("-----------------uniendo hilo %i\n", i);
         pthread_join(threads[i], NULL);
     }
 
-    for (int i = 0; i < height; i++) {
+    printf("--------si esto se lee todo va bien--------------\n");
+
+    // Copiar la mitad desenfocada de la imagen de vuelta a la imagen original
+    for (int i = 0; i < halfHeight; i++) {
         memcpy(image->pixels[i], blurredImage->pixels[i], width * sizeof(Pixel));
     }
 
@@ -123,6 +130,9 @@ void applyBlur(BMP_Image *image, int numThreads) {
     }
     free(blurredImage->pixels);
     free(blurredImage);
+
+    // Destruir el mutex
+    pthread_mutex_destroy(&mutex);
 }
 
 
@@ -152,8 +162,8 @@ int main(int argc, char *argv[]) {
     } else {
         image = readImageFromFile(argv[1]);
     }
-
     if (image == NULL) {
+        fprintf(stderr, "Error reading image.\n");
         return 1;
     }
 
@@ -162,9 +172,13 @@ int main(int argc, char *argv[]) {
 
     int result = 0;
     if (useShm) {
-        result = writeImageToSharedMemory(image,SHM_KEY_BLUR);
+        result = writeImageToSharedMemory(image, SHM_KEY_IMAGE, UPPER_HALF);
     } else {
         result = saveImageToFile(image, argv[1]);
+    }
+    if (result != 0) {
+        fprintf(stderr, "Error writing image.\n");
+        return 1;
     }
 
     if (!useShm) freeImageMemory(image);
