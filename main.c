@@ -11,14 +11,14 @@
 #define SHM_KEY1 1234
 #define SHM_KEY2 5678
 
-
-void manageArgs(int argc, char *argv[], char **inputFile, int *numThreads) {
-    if (argc != 3) {
-        fprintf(stderr, "Usage: %s <input_file> <num_threads>\n", argv[0]);
+void manageArgs(int argc, char *argv[], char **inputFile, char **outputFile, int *numThreads) {
+    if (argc != 4) {
+        fprintf(stderr, "Usage: %s <input_file> <output_file> <num_threads>\n", argv[0]);
         exit(1);
     }
     *inputFile = argv[1];
-    *numThreads = atoi(argv[2]);
+    *outputFile = argv[2];
+    *numThreads = atoi(argv[3]);
     if (*numThreads <= 0) {
         fprintf(stderr, "Number of threads must be a positive integer.\n");
         exit(1);
@@ -32,11 +32,11 @@ void verifyFile(const char *filename) {
     }
 }
 
-
 int main(int argc, char *argv[]) {
     char *inputFile;
+    char *outputFile;
     int numThreads;
-    manageArgs(argc, argv, &inputFile, &numThreads);
+    manageArgs(argc, argv, &inputFile, &outputFile, &numThreads);
     verifyFile(inputFile);
 
     // Read the image from file
@@ -92,7 +92,7 @@ int main(int argc, char *argv[]) {
 
     // Save the combined image to a file
     printf("Saving the combined image...\n");
-    if (!writeImage("combined_image.bmp", combinedImage)) {
+    if (!writeImage(outputFile, combinedImage)) {
         fprintf(stderr, "Failed to save the combined image\n");
         exit(1);
     }
