@@ -29,7 +29,7 @@ void *blurSection(void *arg) {
 
     int width = image->header.width_px;
     int height = image->norm_height;
-    printf("----------soy un hilo ejecutando  blur section ----------------\n");
+    // printf("----------soy un hilo ejecutando  blur section ----------------\n");
     // Kernel de desenfoque 3x3
     float kernel[KERNEL_SIZE][KERNEL_SIZE] = {
         {1.0/9, 1.0/9, 1.0/9},
@@ -103,19 +103,32 @@ void applyBlur(BMP_Image *image, int numThreads) {
     int rowsPerThread = halfHeight / numThreads;
 
     // Inicializar el mutex
-    pthread_mutex_init(&mutex, NULL);
+    if (pthread_mutex_init(&mutex, NULL) != 0) {
+        perror("Error initializing mutex");
+        return;
+    }
 
     for (int i = 0; i < numThreads; i++) {
         tasks[i].image = image;
         tasks[i].blurredImage = blurredImage;
         tasks[i].startRow = i * rowsPerThread;
         tasks[i].endRow = (i == numThreads - 1) ? halfHeight : (i + 1) * rowsPerThread;
-        pthread_create(&threads[i], NULL, blurSection, &tasks[i]);
+        int ret = pthread_create(&threads[i], NULL, blurSection, &tasks[i]);
+        if (ret != 0) {
+            fprintf(stderr, "Error creating thread %d: %s\n", i, strerror(ret));
+            return;
+        }
+        printf("Hilo %i creado correctamente\n", i);
     }
 
     for (int i = 0; i < numThreads; i++) {
         printf("-----------------uniendo hilo %i\n", i);
-        pthread_join(threads[i], NULL);
+        int ret = pthread_join(threads[i], NULL);
+        if (ret != 0) {
+            fprintf(stderr, "Error joining thread %d: %s\n", i, strerror(ret));
+            return;
+        }
+        printf("Hilo %i unido correctamente\n", i);
     }
 
     printf("--------si esto se lee todo va bien--------------\n");
